@@ -49,7 +49,49 @@ const distributions = new Map();  // Payout history
 // SHIPS (Grant Rounds)
 // ============================================================================
 
-app.post('/ships', (req, res) => {
+
+// ============================================================================
+// WHITELIST MIDDLEWARE
+// ============================================================================
+
+let _whitelistCache = null;
+let _whitelistCacheTime = 0;
+const WHITELIST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function fetchWhitelist() {
+  const now = Date.now();
+  if (_whitelistCache && (now - _whitelistCacheTime) < WHITELIST_CACHE_TTL) {
+    return _whitelistCache;
+  }
+  try {
+    const res = await fetch('https://www.owockibot.xyz/api/whitelist');
+    const data = await res.json();
+    _whitelistCache = new Set(data.map(e => (e.address || e).toLowerCase()));
+    _whitelistCacheTime = now;
+    return _whitelistCache;
+  } catch (err) {
+    console.error('Whitelist fetch failed:', err.message);
+    if (_whitelistCache) return _whitelistCache;
+    return new Set();
+  }
+}
+
+function requireWhitelist(addressField = 'address') {
+  return async (req, res, next) => {
+    const addr = req.body?.[addressField] || req.body?.creator || req.body?.participant || req.body?.sender || req.body?.from || req.body?.address;
+    if (!addr) {
+      return res.status(400).json({ error: 'Address required' });
+    }
+    const whitelist = await fetchWhitelist();
+    if (!whitelist.has(addr.toLowerCase())) {
+      return res.status(403).json({ error: 'Invite-only. Tag @owockibot on X to request access.' });
+    }
+    next();
+  };
+}
+
+
+app.post('/ships', requireWhitelist(), (req, res) => {
   const { name, description, criteria, durationDays, captain } = req.body;
 
   if (!name || !captain) {
@@ -125,7 +167,7 @@ app.get('/ships/:id', (req, res) => {
 });
 
 // Fund a ship
-app.post('/ships/:id/fund', async (req, res) => {
+app.post('/ships/:id/fund', requireWhitelist(), async (req, res) => {
   const { txHash } = req.body;
   const ship = ships.get(req.params.id);
   
@@ -158,7 +200,7 @@ app.post('/ships/:id/fund', async (req, res) => {
 // APPLICATIONS
 // ============================================================================
 
-app.post('/ships/:id/apply', (req, res) => {
+app.post('/ships/:id/apply', requireWhitelist(), (req, res) => {
   const { applicant, projectName, description, links } = req.body;
   // Support both camelCase and snake_case for requestAmount
   const requestAmount = req.body.requestAmount || req.body.requested_amount || req.body.requestedAmount;
@@ -225,7 +267,7 @@ app.get('/applications', (req, res) => {
 // ALLOCATIONS (Captain decisions)
 // ============================================================================
 
-app.post('/applications/:id/allocate', (req, res) => {
+app.post('/applications/:id/allocate', requireWhitelist(), (req, res) => {
   const { captain, amount, approved } = req.body;
   const application = applications.get(req.params.id);
   
@@ -291,7 +333,7 @@ app.post('/applications/:id/allocate', (req, res) => {
 // DISTRIBUTION
 // ============================================================================
 
-app.post('/ships/:id/distribute', async (req, res) => {
+app.post('/ships/:id/distribute', requireWhitelist(), async (req, res) => {
   const ship = ships.get(req.params.id);
   if (!ship) return res.status(404).json({ error: 'Ship not found' });
   
